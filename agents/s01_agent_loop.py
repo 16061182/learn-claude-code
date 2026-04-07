@@ -98,7 +98,7 @@ def agent_loop(messages: list):
                 print(output[:200])
                 results.append({"type": "tool_result", "tool_use_id": block.id,
                                 "content": output})
-        messages.append({"role": "user", "content": results})
+        messages.append({"role": "user", "content": results})  # mmc 在模型看来，是user在调用工具，并把调用结果反馈给模型。在我们看来，是agent在调用工具
 
 
 if __name__ == "__main__":

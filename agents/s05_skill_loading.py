@@ -69,11 +69,11 @@ class SkillLoader:
             text = f.read_text()
             meta, body = self._parse_frontmatter(text)
             name = meta.get("name", f.parent.name)
-            self.skills[name] = {"meta": meta, "body": body, "path": str(f)}
+            self.skills[name] = {"meta": meta, "body": body, "path": str(f)}  # mmc 加载skill文本到agent内存
 
     def _parse_frontmatter(self, text: str) -> tuple:
         """Parse YAML frontmatter between --- delimiters."""
-        match = re.match(r"^---\n(.*?)\n---\n(.*)", text, re.DOTALL)
+        match = re.match(r"^---\n(.*?)\n---\n(.*)", text, re.DOTALL)  # mmc 两段---之间的是meta（yaml格式元数据块），第二个---之后的是body
         if not match:
             return {}, text
         try:
@@ -96,7 +96,7 @@ class SkillLoader:
             lines.append(line)
         return "\n".join(lines)
 
-    def get_content(self, name: str) -> str:
+    def get_content(self, name: str) -> str:  # mmc skill工具的核心功能：把skill文本提供给模型
         """Layer 2: full skill body returned in tool_result."""
         skill = self.skills.get(name)
         if not skill:
@@ -111,7 +111,7 @@ SYSTEM = f"""You are a coding agent at {WORKDIR}.
 Use load_skill to access specialized knowledge before tackling unfamiliar topics.
 
 Skills available:
-{SKILL_LOADER.get_descriptions()}"""
+{SKILL_LOADER.get_descriptions()}"""  # mmc skill就是为了避免把所有知识都写在system prompt里，而是通过load_skill来加载。system prompt只写skill的简短描述
 
 
 # -- Tool implementations --

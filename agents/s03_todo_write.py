@@ -163,7 +163,7 @@ TOOLS = [
 # 模型第一次调用TODO工具，编一个todo列表提供给agent作为TODO工具输入
 # agent第一次执行TODO工具，检查todo列表的正确性，并自己保存一份todo列表，然后把todo列表打印成字符串返回给模型
 #
-# 经过几轮其他工具调用之后，agent检测到rounds_since_todo >= 3，提醒模型更新todo列表，模型更新todo列表的方式是调用TODO工具，因为调用TODO工具需要发送新的todo列表
+# 经过几轮其他工具调用之后，agent检测到rounds_since_todo >= 3，提醒模型更新todo列表，模型更新todo列表的方式是调用TODO工具，因为调用TODO工具需要发送新的todo列表，这里有个小巧思——真正更新todo列表的是模型本身，而非TODO工具
 #
 # 模型根据用户上一次给出的todo列表字符串，以及任务进展，更新一个新的todo列表，发送给agent作为TODO工具输入
 # agent检查todo列表的正确性，更新自己保存的todo列表，然后把todo列表打印成字符串返回给模型

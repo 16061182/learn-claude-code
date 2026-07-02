@@ -47,7 +47,7 @@ SYSTEM = f"You are a coding agent at {WORKDIR}. Use background_run for long-runn
 
 
 # -- BackgroundManager: threaded execution + notification queue --
-class BackgroundManager:
+class BackgroundManager:  # mmc 说是后台任务，其实就是后台控制台命令
     def __init__(self):
         self.tasks = {}  # task_id -> {status, result, command}
         self._notification_queue = []  # completed task results
@@ -56,9 +56,9 @@ class BackgroundManager:
     def run(self, command: str) -> str:
         """Start a background thread, return task_id immediately."""
         task_id = str(uuid.uuid4())[:8]
-        self.tasks[task_id] = {"status": "running", "result": None, "command": command}
+        self.tasks[task_id] = {"status": "running", "result": None, "command": command}  # mmc 任务开始时，将任务添加到tasks中
         thread = threading.Thread(
-            target=self._execute, args=(task_id, command), daemon=True
+            target=self._execute, args=(task_id, command), daemon=True  # mmc daemon：守护进程
         )
         thread.start()
         return f"Background task {task_id} started: {command[:80]}"
@@ -78,10 +78,10 @@ class BackgroundManager:
         except Exception as e:
             output = f"Error: {e}"
             status = "error"
-        self.tasks[task_id]["status"] = status
+        self.tasks[task_id]["status"] = status  # mmc 任务执行完，更新tasks中记录的status和result
         self.tasks[task_id]["result"] = output or "(no output)"
         with self._lock:
-            self._notification_queue.append({
+            self._notification_queue.append({  # mmc 任务执行完，将任务结果添加到通知队列中
                 "task_id": task_id,
                 "status": status,
                 "command": command[:80],
@@ -188,10 +188,10 @@ TOOLS = [
 def agent_loop(messages: list):
     while True:
         # Drain background notifications and inject as system message before LLM call
-        notifs = BG.drain_notifications()
+        notifs = BG.drain_notifications()  # mmc 获取已经执行完的后台任务执行结果
         if notifs and messages:
             notif_text = "\n".join(
-                f"[bg:{n['task_id']}] {n['status']}: {n['result']}" for n in notifs
+                f"[bg:{n['task_id']}] {n['status']}: {n['result']}" for n in notifs  # mmc 不写command本身，大模型知道是哪个command的执行结果吗？
             )
             messages.append({"role": "user", "content": f"<background-results>\n{notif_text}\n</background-results>"})
         response = client.messages.create(

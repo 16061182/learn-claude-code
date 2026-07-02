@@ -50,7 +50,7 @@ class TaskManager:
         self.dir.mkdir(exist_ok=True)
         self._next_id = self._max_id() + 1
 
-    def _max_id(self) -> int:
+    def _max_id(self) -> int:  # mmc 根据磁盘task文件名，找到当前最大的task id
         ids = [int(f.stem.split("_")[1]) for f in self.dir.glob("task_*.json")]
         return max(ids) if ids else 0
 
@@ -77,7 +77,7 @@ class TaskManager:
         return json.dumps(self._load(task_id), indent=2, ensure_ascii=False)
 
     def update(self, task_id: int, status: str = None,
-               add_blocked_by: list = None, remove_blocked_by: list = None) -> str:
+               add_blocked_by: list = None, remove_blocked_by: list = None) -> str:  # mmc 更新的可能是status，也可能是blockedBy，分别判断
         task = self._load(task_id)
         if status:
             if status not in ("pending", "in_progress", "completed"):
@@ -92,7 +92,7 @@ class TaskManager:
         self._save(task)
         return json.dumps(task, indent=2, ensure_ascii=False)
 
-    def _clear_dependency(self, completed_id: int):
+    def _clear_dependency(self, completed_id: int):  # mmc 把自己从其他人的blockedBy列表里删除
         """Remove completed_id from all other tasks' blockedBy lists."""
         for f in self.dir.glob("task_*.json"):
             task = json.loads(f.read_text())
@@ -117,6 +117,11 @@ class TaskManager:
             lines.append(f"{marker} #{t['id']}: {t['subject']}{blocked}")
         return "\n".join(lines)
 
+# mmc 设计思路
+# 像是task的状态转换，还有依赖项的增删，本质上都是大模型自己决定的，agent并没有提供真正的逻辑
+# 如果做一个比喻的话，我们的TaskManager更像是大模型的“笔记本”，只记录状态（序列化到磁盘，必要时转换成字符串提供给大模型），基本不执行具体逻辑（这里只有clear_dependency这种细枝末节是agent执行的，感觉交给大模型做也可以），状态修改基本上由大模型自己决定
+#     tool的调用也是大模型自己决定的，包括什么时候调用、调用哪个
+# 要适应这种和传统编程不同之处——大模型不是一段脚本，而是一个真正的智能体，我们要提供尽可能少的逻辑，只提供尽可能多的工具
 
 TASKS = TaskManager(TASKS_DIR)
 

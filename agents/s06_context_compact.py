@@ -11,7 +11,7 @@ Three-layer compression pipeline so the agent can work forever:
     +------------------+
             |
             v
-    [Layer 1: micro_compact]        (silent, every turn)
+    [Layer 1: micro_compact]        (silent, every turn)        mmc 第一层 -- micro_compact: 每次 LLM 调用前, 将旧的 tool result 替换为占位符。
       Replace non-read_file tool_result content older than last 3
       with "[Previous: used {tool_name}]"
             |
@@ -21,13 +21,13 @@ Three-layer compression pipeline so the agent can work forever:
        no              yes
        |               |
        v               v
-    continue    [Layer 2: auto_compact]
+    continue    [Layer 2: auto_compact] mmc 第二层 -- auto_compact: token 超过阈值时, 保存完整对话到磁盘, 让 LLM 做摘要。
                   Save full transcript to .transcripts/
                   Ask LLM to summarize conversation.
                   Replace all messages with [summary].
                         |
                         v
-                [Layer 3: compact tool]
+                [Layer 3: compact tool] mmc 第三层 -- manual compact: compact 工具按需触发同样的摘要机制。
                   Model calls compact -> immediate summarization.
                   Same as auto, triggered manually.
 
@@ -87,7 +87,7 @@ def micro_compact(messages: list) -> list:
                         tool_name_map[block.id] = block.name
     # Clear old results (keep last KEEP_RECENT). Preserve read_file outputs because
     # they are reference material; compacting them forces the agent to re-read files.
-    to_clear = tool_results[:-KEEP_RECENT]
+    to_clear = tool_results[:-KEEP_RECENT]  # mmc 末尾KEEP_RECENT个tool_result不压缩
     for _, _, result in to_clear:
         if not isinstance(result.get("content"), str) or len(result["content"]) <= 100:
             continue
@@ -95,7 +95,7 @@ def micro_compact(messages: list) -> list:
         tool_name = tool_name_map.get(tool_id, "unknown")
         if tool_name in PRESERVE_RESULT_TOOLS:
             continue
-        result["content"] = f"[Previous: used {tool_name}]"
+        result["content"] = f"[Previous: used {tool_name}]"  # mmc 用占位符替换tool_result
     return messages
 
 
@@ -106,11 +106,11 @@ def auto_compact(messages: list) -> list:
     transcript_path = TRANSCRIPT_DIR / f"transcript_{int(time.time())}.jsonl"
     with open(transcript_path, "w") as f:
         for msg in messages:
-            f.write(json.dumps(msg, default=str) + "\n")
+            f.write(json.dumps(msg, default=str) + "\n")  # mmc 序列化全部历史对话，持久保存
     print(f"[transcript saved: {transcript_path}]")
     # Ask LLM to summarize
     conversation_text = json.dumps(messages, default=str)[-80000:]
-    response = client.messages.create(
+    response = client.messages.create(  # mmc 相当于创建一个subagent用来总结全部历史对话
         model=MODEL,
         messages=[{"role": "user", "content":
             "Summarize this conversation for continuity. Include: "
@@ -181,7 +181,7 @@ TOOL_HANDLERS = {
     "read_file":  lambda **kw: run_read(kw["path"], kw.get("limit")),
     "write_file": lambda **kw: run_write(kw["path"], kw["content"]),
     "edit_file":  lambda **kw: run_edit(kw["path"], kw["old_text"], kw["new_text"]),
-    "compact":    lambda **kw: "Manual compression requested.",
+    "compact":    lambda **kw: "Manual compression requested.",  # mmc 用skill实现按需触发压缩
 }
 
 TOOLS = [
@@ -205,7 +205,7 @@ def agent_loop(messages: list):
         # Layer 2: auto_compact if token estimate exceeds threshold
         if estimate_tokens(messages) > THRESHOLD:
             print("[auto_compact triggered]")
-            messages[:] = auto_compact(messages)
+            messages[:] = auto_compact(messages)  # mmc 序列化历史对话到本地，用模型压缩历史对话，用summary代替历史对话
         response = client.messages.create(
             model=MODEL, system=SYSTEM, messages=messages,
             tools=TOOLS, max_tokens=8000,
@@ -217,7 +217,7 @@ def agent_loop(messages: list):
         manual_compact = False
         for block in response.content:
             if block.type == "tool_use":
-                if block.name == "compact":
+                if block.name == "compact":  # mmc 模型调用压缩历史对话，不是立即压缩，而是在当前轮agent_loop_body调用结束后压缩
                     manual_compact = True
                     output = "Compressing..."
                 else:

@@ -362,9 +362,33 @@ class MessageBus:
         inbox.unlink()  # consume: read + delete
         return msgs
 
+    def peek_inbox(self, agent: str) -> list[dict]:
+        # FIX #2/#3: 非销毁式读取。teammate 改用它来“看”信箱，
+        # 这样 .jsonl 文件永远不会被 unlink。
+        # 旧 bug 的根因：模型被告知“去读 inbox”，于是 read_file 那个 .jsonl，
+        # 但销毁式读取已经把它删了 -> 读到错误 -> 绕圈。peek 让文件始终存在。
+        inbox = MAILBOX_DIR / f"{agent}.jsonl"
+        if not inbox.exists():
+            return []
+        return [json.loads(line) for line in inbox.read_text().splitlines()
+                if line.strip()]
+
 
 BUS = MessageBus()
-active_teammates: dict[str, bool] = {}
+active_teammates: dict[str, bool] = {} # mmc 正在活跃的teammate（线程）
+
+# FIX #2/#3: 每个 teammate 的“已读游标”，记录已经投递给它的信箱消息条数。
+# 配合非销毁式 peek_inbox，teammate 永远不会对 .jsonl 做 unlink，
+# 因此模型不可能再去“读一个已被删除的文件”。
+SEEN: dict[str, int] = {}
+
+
+def new_messages(agent: str):
+    """只返回该 teammate 还没见过的新消息，以及消息总数（用于推进 SEEN 游标）。
+    使用非销毁式读取，不会删除文件。"""
+    all_msgs = BUS.peek_inbox(agent)
+    seen = SEEN.get(agent, 0)
+    return all_msgs[seen:], len(all_msgs)
 
 # ── Protocol State (s16 new) ──
 
@@ -379,7 +403,7 @@ class ProtocolState:
     created_at: float = field(default_factory=time.time)
 
 
-pending_requests: dict[str, ProtocolState] = {}
+pending_requests: dict[str, ProtocolState] = {} # mmc 协议相关的消息（"shutdown" | "plan_approval"）投递信箱时，在这里保存一个索引
 
 
 def new_request_id() -> str:
@@ -424,14 +448,14 @@ def consume_lead_inbox(route_protocol: bool = True) -> list[dict]:
     msgs = BUS.read_inbox("lead")
     if not msgs:
         return []
-    if route_protocol:
+    if route_protocol: # mmc 本代码中的调用，route_protocol都为true
         for msg in msgs:
             meta = msg.get("metadata", {})
             req_id = meta.get("request_id", "")
             msg_type = msg.get("type", "")
             if req_id and msg_type.endswith("_response"):
                 approve = meta.get("approve", False)
-                match_response(msg_type, req_id, approve)
+                match_response(msg_type, req_id, approve) # mmc consume_lead_inbox（L427-434）的路由规则只有一条：带 req_id 且 type 以 _response 结尾的消息才自动 match_response。
     return msgs
 
 
@@ -444,26 +468,38 @@ def spawn_teammate_thread(name: str, role: str, prompt: str) -> str:
     if name in active_teammates:
         return f"Teammate '{name}' already exists"
 
+    # FIX #1: 明确指令通道，杜绝模型去读 .mailboxes/*.jsonl 文件。
+    # 旧措辞 "via your inbox" 暗示了一个物理文件，导致模型去 read_file 一个
+    # 已经被销毁式读取删掉的文件。新措辞：指令直接出现在 <inbox> 块里，看到就
+    # 执行；想自查就调 check_inbox 工具，绝不 read_file 信箱文件。
     system = (f"You are '{name}', a {role}. "
-              f"Use tools to complete tasks. "
+              f"Use tools to complete tasks.\n"
+              f"INSTRUCTIONS: New instructions from the Lead appear inside "
+              f"<inbox>...</inbox> blocks in this conversation. When you see an "
+              f"<inbox> block, treat its content as your instruction and ACT ON "
+              f"IT DIRECTLY (e.g. call write_file) — do NOT read any file and do "
+              f"NOT run bash to look for an inbox file.\n"
+              f"If you simply want to check whether new messages arrived, call "
+              f"the check_inbox tool. Never use read_file on paths under "
+              f".mailboxes/.\n"
               f"Check inbox for protocol messages (shutdown_request, etc).")
 
-    def handle_inbox_message(name: str, msg: dict, messages: list) -> bool:
+    def handle_inbox_message(name: str, msg: dict, messages: list) -> bool: # mmc 处理协议相关的消息，有关机请求和计划同意通知两种
         """Dispatch incoming protocol messages by type.
         Returns True if teammate should stop."""
         msg_type = msg.get("type", "message")
         meta = msg.get("metadata", {})
         req_id = meta.get("request_id", "")
 
-        if msg_type == "shutdown_request":
+        if msg_type == "shutdown_request": # mmc 关机请求
             BUS.send(name, "lead", "Shutting down gracefully.",
                      "shutdown_response",
-                     {"request_id": req_id, "approve": True})
+                     {"request_id": req_id, "approve": True}) # mmc metadata里放自己回复的那条request的id，以及是否同意
             print(f"  \033[35m[protocol] {name} approved shutdown "
                   f"({req_id})\033[0m")
             return True  # stop the loop
 
-        if msg_type == "plan_approval_response":
+        if msg_type == "plan_approval_response": # mmc 计划同意通知
             approve = meta.get("approve", False)
             if approve:
                 messages.append({"role": "user",
@@ -501,37 +537,67 @@ def spawn_teammate_thread(name: str, role: str, prompt: str) -> str:
              "input_schema": {"type": "object",
                               "properties": {"plan": {"type": "string"}},
                               "required": ["plan"]}},
+            {"name": "check_inbox",  # FIX #2: 正规的“查收件箱”手段
+             "description": "Check for new messages from the Lead or other agents. "
+                            "Returns unseen messages and does NOT read any file. "
+                            "Use this instead of reading .mailboxes/*.jsonl.",
+             "input_schema": {"type": "object",
+                              "properties": {}}},
         ]
         sub_handlers = {
             "bash": run_bash, "read_file": run_read, "write_file": run_write,
             "send_message": lambda to, content: (BUS.send(name, to, content),
                                                   "Sent")[1],
-            "submit_plan": lambda plan: _teammate_submit_plan(name, plan),
+            "submit_plan": lambda plan: _teammate_submit_plan(name, plan), # mmc 注意
+            "check_inbox": lambda: _teammate_check_inbox(),  # FIX #2
         }
 
+        def _teammate_check_inbox():
+            # FIX #2: 安全、正规的查收件箱方式。使用非销毁式 peek + SEEN 游标，
+            # 永远不可能读到“已被删除的文件”。这正是要替代模型旧习惯
+            # （read_file .mailboxes/*.jsonl）的手段。
+            msgs, total = new_messages(name)
+            SEEN[name] = total
+            if not msgs:
+                return "No new messages."
+            lines = [f"From {m.get('from')}: {m.get('content')}" for m in msgs]
+            return "New messages:\n" + "\n".join(lines)
+
         shutdown_requested = False
+        first_done = False   # FIX #3: 允许第一轮处理初始 prompt，之后再做“空转”门控
+        mid_task = False      # FIX #3: 模型正处于多步任务中（上一轮请求了工具）时为 True
         while not shutdown_requested:
-            # Check inbox for protocol messages
-            inbox = BUS.read_inbox(name)
+            # FIX #3: 改用非销毁式 new_messages（peek + SEEN 游标），不再 unlink 文件
+            inbox, total = new_messages(name)
             should_stop = False
-            non_protocol = []
+            non_protocol = []   # FIX #4: 每轮重新初始化，避免旧消息跨轮累积重复注入
             for msg in inbox:
                 if msg.get("type") in ("shutdown_request", "plan_approval_response"):
-                    should_stop = handle_inbox_message(name, msg, messages)
+                    should_stop = handle_inbox_message(name, msg, messages) # mmc 处理协议相关的消息，有关机请求和计划同意通知两种
                     if should_stop:
                         break
                 else:
-                    non_protocol.append(msg)
+                    non_protocol.append(msg) # mmc 非协议相关的消息，先收集起来
             if should_stop:
                 shutdown_requested = True
+                SEEN[name] = total   # 推进游标
                 break
             if non_protocol:
                 inbox_json = json.dumps(non_protocol)
                 messages.append({"role": "user",
-                    "content": "<inbox>" + inbox_json + "</inbox>"})
+                    "content": "<inbox>" + inbox_json + "</inbox>"}) # mmc 非协议相关的消息，发给大模型处理
+
+            # FIX #3: 只有“有新消息要处理”或“正在多步任务中”时才调 LLM；
+            # 否则 WAIT，不要拿着空信箱去调 LLM（旧 bug：模型被空转调用后去
+            # 探索文件系统、并读那个已被删除的 .jsonl）。
+            if not non_protocol and not inbox and first_done and not mid_task:
+                time.sleep(1)
+                continue
+            first_done = True
+            SEEN[name] = total   # 推进游标：本轮消息已投递
 
             # LLM turn
-            try:
+            try: # mmc 由此可以看到这里的外层循环就是react循环，也就是之前代码中的内层循环agent_loop
                 response = client.messages.create(
                     model=MODEL, system=system, messages=messages[-20:],
                     tools=sub_tools, max_tokens=8000)
@@ -539,31 +605,38 @@ def spawn_teammate_thread(name: str, role: str, prompt: str) -> str:
                 break
 
             messages.append({"role": "assistant", "content": response.content})
-            if response.stop_reason != "tool_use":
+            mid_task = (response.stop_reason == "tool_use")  # FIX #3: 记录是否处于多步任务
+            if response.stop_reason != "tool_use": # mmc 本来应该直接从agent_loop中return，但是这里并没有，用了一个循环来等待信箱里的新消息，直到读到shutdown_request
                 # Idle: wait for inbox messages instead of exiting
                 # Real CC sends idle_notification to Lead here
                 while not shutdown_requested:
-                    time.sleep(1)
-                    inbox = BUS.read_inbox(name)
-                    if not inbox:
-                        continue
+                    time.sleep(1) # mmc 每一秒询问一次
+                    non_protocol = []   # FIX #4: 空闲循环每轮重新初始化，避免重复注入
+                    inbox, total = new_messages(name)  # FIX #3: 非销毁式
+                    delivered = False
                     for msg in inbox:
                         if msg.get("type") in ("shutdown_request", "plan_approval_response"):
-                            should_stop = handle_inbox_message(name, msg, messages)
+                            should_stop = handle_inbox_message(name, msg, messages) # mmc 如果是plan_approval_response，会追加messages
+                            delivered = True
                             if should_stop:
-                                shutdown_requested = True
+                                shutdown_requested = True # mmc shutdown_requested = True时，也会退出外层循环
                                 break
                         else:
                             non_protocol.append(msg)
+                            delivered = True
+                    SEEN[name] = total   # FIX #4: 空闲循环也推进游标，避免协议消息被重复追加
                     if shutdown_requested:
                         break
                     if non_protocol:
                         inbox_json = json.dumps(non_protocol)
-                        messages.append({"role": "user",
+                        messages.append({"role": "user", # mmc non_protocol也追加到messages
                             "content": "<inbox>" + inbox_json + "</inbox>"})
-                        break  # back to LLM turn with new messages
+                        break  # back to LLM turn with new messages # mmc 走到这里的话，相当于之前的代码里用户输入了新消息，需要开启新一轮agent_loop来处理这个新消息
+                    if delivered:
+                        # 协议消息（如 plan approved）已追加 -> 重新跑一轮 LLM 处理它
+                        break
 
-            # Execute tool calls
+            # Execute tool calls # mmc 如果进了上面的if response.stop_reason != "tool_use"，那这里的results就为空，因为没有工具调用
             results = []
             for block in response.content:
                 if block.type == "tool_use":
@@ -574,13 +647,13 @@ def spawn_teammate_thread(name: str, role: str, prompt: str) -> str:
                                     "content": str(output)})
             messages.append({"role": "user", "content": results})
 
-        # Send final summary to Lead
+        # Send final summary to Lead # mmc shutdown了
         summary = "Done."
         for msg in reversed(messages):
             if msg["role"] == "assistant" and isinstance(msg["content"], list):
                 for b in msg["content"]:
                     if getattr(b, "type", None) == "text":
-                        summary = b.text
+                        summary = b.text # mmc 找到最后一条大模型的消息，作为总结发给lead
                         break
                 else:
                     continue
@@ -605,7 +678,7 @@ def _teammate_submit_plan(from_name: str, plan: str) -> str:
     gating would require blocking the teammate's tool dispatch until
     approval arrives.
     """
-    req_id = new_request_id()
+    req_id = new_request_id() # mmc 协议消息，有req_id
     pending_requests[req_id] = ProtocolState(
         request_id=req_id, type="plan_approval",
         sender=from_name, target="lead",
@@ -619,7 +692,7 @@ def _teammate_submit_plan(from_name: str, plan: str) -> str:
 # ── Lead Protocol Tools (s16 new) ──
 
 def run_request_shutdown(teammate: str) -> str:
-    req_id = new_request_id()
+    req_id = new_request_id() # mmc 协议消息，有req_id
     pending_requests[req_id] = ProtocolState(
         request_id=req_id, type="shutdown",
         sender="lead", target=teammate,
@@ -639,7 +712,7 @@ def run_request_plan(teammate: str, task: str) -> str:
     return f"Asked {teammate} to submit a plan"
 
 
-def run_review_plan(request_id: str, approve: bool, feedback: str = "") -> str:
+def run_review_plan(request_id: str, approve: bool, feedback: str = "") -> str: # mmc 大模型读信箱里的消息，里面有plan和它的request_id，然后调用这个工具，填写它要回复的plan的request_id
     state = pending_requests.get(request_id)
     if not state:
         return f"Request {request_id} not found"
@@ -648,7 +721,7 @@ def run_review_plan(request_id: str, approve: bool, feedback: str = "") -> str:
     state.status = "approved" if approve else "rejected"
     BUS.send("lead", state.sender, feedback or ("Approved" if approve else "Rejected"),
              "plan_approval_response",
-             {"request_id": request_id, "approve": approve})
+             {"request_id": request_id, "approve": approve}) # mmc metadata：协议消息的相关信息
     icon = "✓" if approve else "✗"
     print(f"  \033[32m[protocol] plan {icon} ({request_id})\033[0m")
     return f"Plan {'approved' if approve else 'rejected'} ({request_id})"

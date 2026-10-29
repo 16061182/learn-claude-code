@@ -89,7 +89,7 @@ def list_skills() -> str:
         return "(no skills found)"
     return "\n".join(f"- **{s['name']}**: {s['description']}" for s in SKILL_REGISTRY.values())
 
-# s07: SYSTEM includes skill catalog (cheap — just names + descriptions)
+# s07: SYSTEM includes skill catalog (cheap — just names + descriptions)  # mmc skill本质是prompt，这里系统prompt不写skill全文，按需加载
 def build_system() -> str:
     """Build SYSTEM prompt with skill catalog injected at startup."""
     catalog = list_skills()
@@ -99,7 +99,7 @@ def build_system() -> str:
         "Use load_skill to get full details when needed."
     )
 
-SYSTEM = build_system()
+SYSTEM = build_system()  # mmc 注入了技能名和描述的prompt
 
 # s07: subagent gets its own system prompt — no skill loading, no task
 SUB_SYSTEM = (

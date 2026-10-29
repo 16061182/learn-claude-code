@@ -266,7 +266,7 @@ def assemble_system_prompt(context: dict) -> str:
         sections.append(f"Relevant memories:\n{context['memories']}")
     mcp_names = list(mcp_clients.keys())
     if mcp_names:
-        sections.append(f"Connected MCP servers: {', '.join(mcp_names)}")
+        sections.append(f"Connected MCP servers: {', '.join(mcp_names)}") # mmc 已经连接的mcp服务器
     return "\n\n".join(sections)
 
 
@@ -739,7 +739,7 @@ MOCK_SERVERS = {
 def connect_mcp(name: str) -> str:
     if name in mcp_clients:
         return f"MCP server '{name}' already connected"
-    factory = MOCK_SERVERS.get(name)
+    factory = MOCK_SERVERS.get(name) # mmc MOCK_SERVERS 里存的是工厂函数（每个 name 对应一个），调用 factory() 才真正创建一个全新的 MCPClient 实例。这里只取到工厂、暂不实例化，等到下行 factory() 才建 client；同一个 name 已被连接时会在上面 L740 直接返回，所以每个 name 至多一个 client。
     if not factory:
         available = ", ".join(MOCK_SERVERS.keys())
         return f"Unknown server '{name}'. Available: {available}"
@@ -756,7 +756,7 @@ def assemble_tool_pool() -> tuple[list[dict], dict]:
     tools = list(BUILTIN_TOOLS)
     handlers = dict(BUILTIN_HANDLERS)
     for server_name, mcp_client in mcp_clients.items():
-        safe_server = normalize_mcp_name(server_name)
+        safe_server = normalize_mcp_name(server_name) # mmc 禁止的字符替换成下划线
         for tool_def in mcp_client.tools:
             safe_tool = normalize_mcp_name(tool_def["name"])
             prefixed = f"mcp__{safe_server}__{safe_tool}"
@@ -922,7 +922,7 @@ BUILTIN_TOOLS = [
                       "properties": {"name": {"type": "string"}},
                       "required": ["name"]}},
     {"name": "connect_mcp",
-     "description": "Connect to an MCP server (docs, deploy) and discover tools.",
+     "description": "Connect to an MCP server (docs, deploy) and discover tools.", # mmc 注意这里写了mcp服务器有哪些（docs，deploy），要不然大模型不知道
      "input_schema": {"type": "object",
                       "properties": {"name": {"type": "string"}},
                       "required": ["name"]}},
@@ -940,7 +940,7 @@ BUILTIN_HANDLERS = {
     "create_worktree": run_create_worktree,
     "remove_worktree": run_remove_worktree,
     "keep_worktree": run_keep_worktree,
-    "connect_mcp": run_connect_mcp,
+    "connect_mcp": run_connect_mcp, # mmc 在这里，想把mcp tools注册进工具列表，要先调用run_connect_mcp工具来连接mcp服务器。大模型如何知道有哪些mcp服务器？本demo中是写在connect_mcp工具的描述里的
 }
 
 
@@ -960,7 +960,7 @@ def update_context(context: dict, messages: list) -> dict:
 # ── Agent Loop (s19: dynamic tool pool, no prompt cache) ──
 
 def agent_loop(messages: list, context: dict):
-    tools, handlers = assemble_tool_pool()
+    tools, handlers = assemble_tool_pool() # mmc 要把mcp tools也算上
     system = assemble_system_prompt(context)
     while True:
         try:
@@ -988,7 +988,7 @@ def agent_loop(messages: list, context: dict):
                             "tool_use_id": block.id, "content": output})
         messages.append({"role": "user", "content": results})
 
-        if any(b.name == "connect_mcp" for b in response.content
+        if any(b.name == "connect_mcp" for b in response.content # mmc 如果调了connect_mcp工具，那么工具列表要更新
                if b.type == "tool_use"):
             tools, handlers = assemble_tool_pool()
             context = update_context(context, messages)

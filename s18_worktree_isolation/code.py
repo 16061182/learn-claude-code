@@ -198,7 +198,7 @@ def create_worktree(name: str, task_id: str = "") -> str:
     if not ok:
         return f"Git error: {result}"
     if task_id:
-        bind_task_to_worktree(task_id, name)
+        bind_task_to_worktree(task_id, name) # mmc 给task绑定worktree name
     log_event("create", name, task_id)
     print(f"  \033[33m[worktree] created: {name} at {path}\033[0m")
     return f"Worktree '{name}' created at {path}"
@@ -240,10 +240,11 @@ def remove_worktree(name: str, discard_changes: bool = False) -> str:
             return (f"Cannot verify worktree '{name}' status. "
                     "Use discard_changes=true to force removal.")
         if files > 0 or commits > 0:
-            return (f"Worktree '{name}' has {files} uncommitted file(s) "
+            return (f"Worktree '{name}' has {files} uncommitted file(s) " # mmc 告知大模型有未提交的修改、未推送的提交，提醒使用remove_worktree+discard_changes来丢弃所有修改，或使用keep_worktree来保留修改
                     f"and {commits} unpushed commit(s). "
                     "Use discard_changes=true to force removal, "
                     "or keep_worktree to preserve for review.")
+    # mmc discard_changes == True，会走到下面
     ok1, _ = run_git(["worktree", "remove", str(path), "--force"])
     if not ok1:
         return f"Failed to remove worktree directory for '{name}'"

@@ -181,7 +181,7 @@ def safe_path(p: str) -> Path:
     return path
 
 
-def run_bash(command: str, run_in_background: bool = False) -> str:
+def run_bash(command: str, run_in_background: bool = False) -> str: # mmc 这个函数有run_in_background这个参数是因为暴露给大模型的工具接口有这个参数。大模型发来的这个参数不在这个函数里处理，而是在调这个函数之前处理
     # run_in_background is handled by agent_loop dispatch, not here
     try:
         r = subprocess.run(command, shell=True, cwd=WORKDIR,
@@ -317,20 +317,20 @@ background_lock = threading.Lock()
 
 def is_slow_operation(tool_name: str, tool_input: dict) -> bool:
     """Fallback heuristic: commands likely to take > 30s."""
-    if tool_name != "bash":
+    if tool_name != "bash": # mmc 只有bash工具需要background
         return False
     cmd = tool_input.get("command", "").lower()
     slow_keywords = ["install", "build", "test", "deploy", "compile",
                      "docker build", "pip install", "npm install",
                      "cargo build", "pytest", "make"]
-    return any(kw in cmd for kw in slow_keywords)
+    return any(kw in cmd for kw in slow_keywords) # mmc 包含上述关键词的命令放后台执行
 
 
 def should_run_background(tool_name: str, tool_input: dict) -> bool:
     """Model explicit request takes priority; fallback to heuristic."""
-    if tool_input.get("run_in_background"):
+    if tool_input.get("run_in_background"): # mmc 工具调用参数里有run_in_background，且为True
         return True
-    return is_slow_operation(tool_name, tool_input)
+    return is_slow_operation(tool_name, tool_input) # mmc 如果大模型没有显式指明run_in_background，就fallback到启发式判断
 
 
 def execute_tool(block) -> str:
@@ -350,8 +350,8 @@ def start_background_task(block) -> str:
 
     def worker():
         result = execute_tool(block)
-        with background_lock:
-            background_tasks[bg_id]["status"] = "completed"
+        with background_lock: # mmc ！？锁锁？！保护全局变量background_tasks和background_results的锁
+            background_tasks[bg_id]["status"] = "completed" # mmc 执行完后设置状态
             background_results[bg_id] = result
 
     with background_lock:
@@ -369,7 +369,7 @@ def start_background_task(block) -> str:
 def collect_background_results() -> list[str]:
     """Collect completed background results as task_notification messages."""
     with background_lock:
-        ready_ids = [bid for bid, task in background_tasks.items()
+        ready_ids = [bid for bid, task in background_tasks.items() # mmc 收集执行完的任务
                      if task["status"] == "completed"]
     notifications = []
     for bg_id in ready_ids:
@@ -386,7 +386,7 @@ def collect_background_results() -> list[str]:
             f"</task_notification>")
         print(f"  \033[32m[background done] {bg_id}: "
               f"{task['command'][:40]} ({len(output)} chars)\033[0m")
-    return notifications
+    return notifications # mmc 所有完成的任务的结果
 
 
 # ── Context ──
@@ -434,7 +434,7 @@ def agent_loop(messages: list, context: dict):
                 bg_id = start_background_task(block)
                 results.append({"type": "tool_result",
                                 "tool_use_id": block.id,
-                                "content": f"[Background task {bg_id} started] "
+                                "content": f"[Background task {bg_id} started] " # mmc 把后台任务id告知大模型
                                            f"Command: {block.input.get('command', '')}. "
                                            f"Result will be available when complete."})
             else:
@@ -446,10 +446,10 @@ def agent_loop(messages: list, context: dict):
 
         # Inject tool results + background notifications in one user message
         user_content = list(results)
-        bg_notifications = collect_background_results()
+        bg_notifications = collect_background_results() # mmc 固定时机收集后台任务结果，类似hook
         if bg_notifications:
             for notif in bg_notifications:
-                user_content.append({"type": "text", "text": notif})
+                user_content.append({"type": "text", "text": notif}) # mmc 每条后台任务结果单独开一条result，保持一次工具调用对应一条result的惯例
             print(f"  \033[32m[inject] {len(bg_notifications)} background "
                   f"notification(s)\033[0m")
         messages.append({"role": "user", "content": user_content})

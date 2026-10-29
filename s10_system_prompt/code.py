@@ -57,14 +57,14 @@ def assemble_system_prompt(context: dict) -> str:
     sections.append(PROMPT_SECTIONS["workspace"])
 
     # Conditional — memory loaded when MEMORY.md exists and has content
-    memories = context.get("memories", "")
+    memories = context.get("memories", "") # mmc 教学代码，context里只有memories有用
     if memories:
-        sections.append(f"Relevant memories:\n{memories}")
+        sections.append(f"Relevant memories:\n{memories}") # mmc 这个的内容是memory索引文件
 
     return "\n\n".join(sections)
 
 
-_last_context_key = None
+_last_context_key = None # mmc 用来判断缓存是否命中，若有相同context，则用相同prompt
 _last_prompt = None
 
 
@@ -79,7 +79,7 @@ def get_system_prompt(context: dict) -> str:
     """
     global _last_context_key, _last_prompt
     key = json.dumps(context, sort_keys=True, ensure_ascii=False, default=str)
-    if key == _last_context_key and _last_prompt:
+    if key == _last_context_key and _last_prompt: # mmc key == _last_context_key即缓存命中。我超，硬编码到这种程度吗
         print("  \033[90m[cache hit] system prompt unchanged\033[0m")
         return _last_prompt
     _last_context_key = key

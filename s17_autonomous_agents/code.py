@@ -324,20 +324,20 @@ def idle_poll(name: str, messages: list, role: str) -> str:
             messages.append({"role": "user",
                 "content": "<inbox>" + json.dumps(inbox) + "</inbox>"})
             print(f"  \033[36m[idle] {name} found inbox messages\033[0m")
-            return "work"
+            return "work" # mmc idle时，信箱里有新信息，返回work
 
         # Scan task board
         unclaimed = scan_unclaimed_tasks()
         if unclaimed:
             task = unclaimed[0]
-            result = claim_task(task["id"], name)
+            result = claim_task(task["id"], name) # mmc 认领闲置任务
             if "Claimed" in result:
                 messages.append({"role": "user",
                     "content": f"<auto-claimed>Task {task['id']}: "
                                f"{task['subject']}</auto-claimed>"})
                 print(f"  \033[32m[idle] {name} auto-claimed: "
                       f"{task['subject']}\033[0m")
-                return "work"
+                return "work" # mmc idle时，如果有能认领的闲置任务，返回work
             print(f"  \033[33m[idle] {name} claim failed: "
                   f"{result}\033[0m")
 
@@ -356,7 +356,7 @@ def spawn_teammate_thread(name: str, role: str, prompt: str) -> str:
               f"You can list and claim tasks from the board. "
               f"Check inbox for protocol messages.")
 
-    def handle_inbox_message(name: str, msg: dict, messages: list):
+    def handle_inbox_message(name: str, msg: dict, messages: list): # mmc 对于协议消息的独有处理
         """Dispatch incoming protocol messages by type."""
         msg_type = msg.get("type", "message")
         meta = msg.get("metadata", {})
@@ -370,7 +370,7 @@ def spawn_teammate_thread(name: str, role: str, prompt: str) -> str:
                   f"({req_id})\033[0m")
             return True
 
-        if msg_type == "plan_approval_response":
+        if msg_type == "plan_approval_response": # mmc 收到协议消息的response，理论上应该进行route protocol，也就是调用match_response
             approve = meta.get("approve", False)
             if approve:
                 messages.append({"role": "user",
@@ -450,7 +450,7 @@ def spawn_teammate_thread(name: str, role: str, prompt: str) -> str:
 
         # Outer loop: WORK → IDLE cycle
         while True:
-            # Identity re-injection (s17)
+            # Identity re-injection (s17) # mmc autoCompact（s08）之后，队友的 messages 列表可能被压缩成一段摘要。每次进入新的 WORK 阶段时检查
             if len(messages) <= 3:
                 messages.insert(0, {"role": "user",
                     "content": f"<identity>You are '{name}', role: {role}. "
@@ -472,7 +472,7 @@ def spawn_teammate_thread(name: str, role: str, prompt: str) -> str:
                                     if m.get("type") == "message"]
                     if non_protocol:
                         messages.append({"role": "user",
-                            "content": f"<inbox>{json.dumps(non_protocol)}</inbox>"})
+                            "content": f"<inbox>{json.dumps(non_protocol)}</inbox>"}) # mmc 这里仅把非协议消息发给大模型。协议消息在 handle_inbox_message 中处理，若是plan_approval_response类型的协议消息也会发一条message给大模型
 
                 try:
                     response = client.messages.create(
@@ -496,12 +496,13 @@ def spawn_teammate_thread(name: str, role: str, prompt: str) -> str:
             if should_shutdown:
                 break
 
-            # IDLE phase (s17 new)
+            # IDLE phase (s17 new) # mmc 上面的循环跑了十次之后（可称其为工具调用+信箱读取循环，相当于主线程的agent_loop），固定进入到此
             idle_result = idle_poll(name, messages, role)
             if idle_result == "shutdown":
                 break
             if idle_result == "timeout":
                 break
+            # idle_poll 返回 "work" 时已将消息注入 messages，直接回到while True开始新一轮循环（并进入WORK phase）
 
         # Summary
         summary = "Done."
@@ -625,8 +626,8 @@ def consume_lead_inbox(route_protocol=True) -> list[dict]:
             meta = msg.get("metadata", {})
             req_id = meta.get("request_id", "")
             msg_type = msg.get("type", "")
-            if req_id and msg_type.endswith("_response"):
-                match_response(msg_type, req_id, meta.get("approve", False))
+            if req_id and msg_type.endswith("_response"): # mmc teammate发来的response，那就是shutdown_response了
+                match_response(msg_type, req_id, meta.get("approve", False)) # mmc 这就是所谓“route protocol”的操作
     return msgs
 
 

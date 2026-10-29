@@ -179,6 +179,7 @@ TOOL_HANDLERS = {
 #  NEW in s06: Subagent — fresh messages[], summary only
 # ═══════════════════════════════════════════════════════════
 
+# mmc 禁止subagent使用todo_write和task工具
 SUB_TOOLS = [
     {"name": "bash", "description": "Run a shell command.",
      "input_schema": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}},
@@ -254,7 +255,7 @@ TOOLS.append({
     "description": "Launch a subagent to handle a complex subtask. Returns only the final conclusion.",
     "input_schema": {"type": "object", "properties": {"description": {"type": "string"}}, "required": ["description"]},
 })
-TOOL_HANDLERS["task"] = spawn_subagent
+TOOL_HANDLERS["task"] = spawn_subagent # mmc 添加一个名为task的工具，“task”概念和”subagent”同级
 
 
 # ═══════════════════════════════════════════════════════════

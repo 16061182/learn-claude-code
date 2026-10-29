@@ -58,18 +58,18 @@ MEMORY_TYPES = ["user", "feedback", "project", "reference"]
 def _parse_frontmatter(text: str) -> tuple[dict, str]:
     if not text.startswith("---"):
         return {}, text
-    parts = text.split("---", 2)
-    if len(parts) < 3:
+    parts = text.split("---", 2)  # mmc maxsplit=2，最多切两刀
+    if len(parts) < 3:  # mmc yaml的格式是 ---\nmeta\n---\nbody，切两刀应该得到三段：['', '\nmeta\n', '\nbody']。如果小于三段，说明格式不对
         return {}, text
     meta = {}
-    for line in parts[1].strip().splitlines():
+    for line in parts[1].strip().splitlines(): # mmc 拿到meta的部分
         if ":" in line:
             k, v = line.split(":", 1)
-            meta[k.strip()] = v.strip().strip('"').strip("'")
+            meta[k.strip()] = v.strip().strip('"').strip("'") # mmc 记录meta键值对
     return meta, parts[2].strip()
 
 
-def write_memory_file(name: str, mem_type: str, description: str, body: str):
+def write_memory_file(name: str, mem_type: str, description: str, body: str): # mmc 写memory文件的函数
     """Write a single memory file with YAML frontmatter."""
     slug = name.lower().replace(" ", "-").replace("/", "-")
     filename = f"{slug}.md"
@@ -81,7 +81,7 @@ def write_memory_file(name: str, mem_type: str, description: str, body: str):
     return filepath
 
 
-def _rebuild_index():
+def _rebuild_index(): # mmc 重写索引文件，用在创建了新memory文件后。不是追加写入，而是每次全量重写，很有教学项目的风格
     """Rebuild MEMORY.md index from all memory files."""
     lines = []
     for f in sorted(MEMORY_DIR.glob("*.md")):
@@ -115,13 +115,13 @@ def list_memory_files() -> list[dict]:
     """List all memory files with metadata."""
     result = []
     for f in sorted(MEMORY_DIR.glob("*.md")):
-        if f.name == "MEMORY.md":
+        if f.name == "MEMORY.md": # mmc 这个是索引文件，跳过
             continue
-        raw = f.read_text()
+        raw = f.read_text() # mmc 读取文件内容
         meta, body = _parse_frontmatter(raw)
         result.append({
             "filename": f.name,
-            "name": meta.get("name", f.stem),
+            "name": meta.get("name", f.stem), # mmc 没有name字段就用去除后缀的文件名
             "description": meta.get("description", ""),
             "type": meta.get("type", "user"),
             "body": body,
@@ -133,7 +133,7 @@ def select_relevant_memories(messages: list, max_items: int = 5) -> list[str]:
     """Select relevant memory filenames by matching recent conversation against
     memory names/descriptions. Uses a simple LLM call (or falls back to keyword
     matching on name+description)."""
-    files = list_memory_files()
+    files = list_memory_files() # mmc 获取所有memory文件内容，不包括索引文件
     if not files:
         return []
 
@@ -145,13 +145,13 @@ def select_relevant_memories(messages: list, max_items: int = 5) -> list[str]:
             if isinstance(content, list):
                 content = " ".join(
                     str(getattr(b, "text", "")) for b in content
-                    if getattr(b, "type", None) == "text"
+                    if getattr(b, "type", None) == "text" # mmc 不要tool_result
                 )
             if isinstance(content, str):
                 recent_texts.append(content)
-            if len(recent_texts) >= 3:
+            if len(recent_texts) >= 3: # mmc 只取3条
                 break
-    recent = " ".join(reversed(recent_texts))[:2000]
+    recent = " ".join(reversed(recent_texts))[:2000] # mmc 用户最近3次说的话（不含tool_result）
 
     if not recent.strip():
         return []
@@ -167,12 +167,12 @@ def select_relevant_memories(messages: list, max_items: int = 5) -> list[str]:
         "select the indices of memories that are clearly relevant. "
         "Return ONLY a JSON array of integers, e.g. [0, 3]. "
         "If none are relevant, return [].\n\n"
-        f"Recent conversation:\n{recent}\n\n"
-        f"Memory catalog:\n{catalog}"
+        f"Recent conversation:\n{recent}\n\n" # mmc 玩家最近说的话
+        f"Memory catalog:\n{catalog}" # mmc 所有memory文件的name和description
     )
 
     try:
-        response = client.messages.create(
+        response = client.messages.create( # mmc 一条独立的请求（side-query），让大模型选择哪些memory文件是相关的
             model=MODEL,
             messages=[{"role": "user", "content": prompt}],
             max_tokens=200,
@@ -188,16 +188,16 @@ def select_relevant_memories(messages: list, max_items: int = 5) -> list[str]:
                     selected.append(files[idx]["filename"])
                     if len(selected) >= max_items:
                         break
-            return selected
+            return selected # mmc 返回相关memory文件的文件名，最多5个
     except Exception:
-        pass
+        pass # 发生异常，就用下面的关键词匹配方法
 
     # Fallback: keyword matching on name + description
-    keywords = [w.lower() for w in recent.split() if len(w) > 3]
+    keywords = [w.lower() for w in recent.split() if len(w) > 3] # mmc 提取玩家最近说的话中的关键词
     selected = []
     for f in files:
         text = (f["name"] + " " + f["description"]).lower()
-        if any(kw in text for kw in keywords):
+        if any(kw in text for kw in keywords): # mmc 如果name或description中包含关键词，就认为是相关的memory文件
             selected.append(f["filename"])
             if len(selected) >= max_items:
                 break
@@ -206,13 +206,13 @@ def select_relevant_memories(messages: list, max_items: int = 5) -> list[str]:
 
 def load_memories(messages: list) -> str:
     """Load relevant memory content for injection into context."""
-    selected_files = select_relevant_memories(messages)
+    selected_files = select_relevant_memories(messages) # mmc 拿到玩家最近说话内容相关的至多5个memory文件
     if not selected_files:
         return ""
 
     parts = ["<relevant_memories>"]
     for filename in selected_files:
-        content = read_memory_file(filename)
+        content = read_memory_file(filename) # mmc 写入每个相关memory文件的全部内容
         if content:
             parts.append(content)
     parts.append("</relevant_memories>")
@@ -250,22 +250,22 @@ def extract_memories(messages: list):
         "'project' (project fact), 'reference' (external pointer)\n"
         "- description: one-line summary for index lookup\n"
         "- body: full detail in markdown\n"
-        "If nothing new or already covered by existing memories, return [].\n\n"
+        "If nothing new or already covered by existing memories, return [].\n\n" # mmc 如果existing_desc里已经有了，就返回空
         f"Existing memories:\n{existing_desc}\n\n"
         f"Dialogue:\n{dialogue[:4000]}"
     )
 
     try:
         response = client.messages.create(
-            model=MODEL, messages=[{"role": "user", "content": prompt}], max_tokens=800
+            model=MODEL, messages=[{"role": "user", "content": prompt}], max_tokens=800 # mmc 让大模型从最近对话中提取新的memory
         )
         text = extract_text(response.content).strip()
         # Extract JSON array from response
-        match = re.search(r'\[.*\]', text, re.DOTALL)
+        match = re.search(r'\[.*\]', text, re.DOTALL) # mmc 在整段文本里搜索第一个 [ 到最后一个 ] 的片段，re.DOTALL 让 . 能匹配换行符
         if not match:
             return
-        items = json.loads(match.group())
-        if not items:
+        items = json.loads(match.group()) # mmc match.group()从捕获的片段中提取分组，由于这里的正则表达式没有括号分组，所以match.group()返回整个匹配文本
+        if not items: # mmc json解析成功的话，items是个列表，里面每一项包含name、type、description、body
             return
         count = 0
         for mem in items:
@@ -307,7 +307,7 @@ def consolidate_memories():
 
     try:
         response = client.messages.create(
-            model=MODEL, messages=[{"role": "user", "content": prompt}], max_tokens=3000
+            model=MODEL, messages=[{"role": "user", "content": prompt}], max_tokens=3000 # mmc 用大模型来合并现有memory文件
         )
         text = extract_text(response.content).strip()
         match = re.search(r'\[.*\]', text, re.DOTALL)
@@ -318,7 +318,7 @@ def consolidate_memories():
         # Remove old memory files (keep MEMORY.md)
         for f in MEMORY_DIR.glob("*.md"):
             if f.name != "MEMORY.md":
-                f.unlink()
+                f.unlink() # mmc 删除文件。这里是在删除所有现有memory文件
 
         for mem in items:
             name = mem.get("name", f"memory_{int(time.time())}")
@@ -335,7 +335,7 @@ def consolidate_memories():
 
 # Build SYSTEM with memory index
 def build_system() -> str:
-    index = read_memory_index()
+    index = read_memory_index() # mmc 读取memory索引文件
     memories_section = f"\n\nMemories available:\n{index}" if index else ""
     return (
         f"You are a coding agent at {WORKDIR}."
@@ -583,13 +583,14 @@ MAX_REACTIVE_RETRIES = 1
 def agent_loop(messages: list):
     reactive_retries = 0
     # s09: inject relevant memory content into the current user turn
-    memories_content = load_memories(messages)
-    memory_turn = len(messages) - 1 if messages and isinstance(messages[-1].get("content"), str) else None
+    memories_content = load_memories(messages) # mmc 玩家每轮对话执行一次
+    memory_turn = len(messages) - 1 if messages and isinstance(messages[-1].get("content"), str) else None # mmc 记录的是当前用户消息在 messages 列表中的索引位置
     # s09: build system once per user turn; memory is updated after the loop returns
-    system = build_system()
+    system = build_system() # mmc 在原版system中加入memory索引文件内容。注意system是每次调用大模型都要发的
 
     while True:
         # s09: save pre-compression snapshot for accurate memory extraction
+        # mmc 保存一份压缩前的副本
         pre_compress = [m if isinstance(m, dict) else {"role": m.get("role",""),
             "content": str(m.get("content",""))} for m in messages]
 
@@ -606,11 +607,11 @@ def agent_loop(messages: list):
             request_messages = messages
             if memories_content and memory_turn is not None and memory_turn < len(messages):
                 request_messages = messages.copy()
-                request_messages[memory_turn] = {
-                    **messages[memory_turn],
-                    "content": memories_content + "\n\n" + messages[memory_turn]["content"],
+                request_messages[memory_turn] = { # mmc 如果触发了压缩，这个memory_turn不就失效了吗？
+                    **messages[memory_turn], # mmc 把原消息字典的所有键值对展开铺进来（如 role、content 等）
+                    "content": memories_content + "\n\n" + messages[memory_turn]["content"], # mmc 字典展开后面紧接着写一个 content 键，会覆盖前面展开得到的 content 键。把用户偏好memories_content拼在最后一条用户消息前面
                 }
-            response = client.messages.create(
+            response = client.messages.create( # mmc 第九课长期记忆系统在这里影响了system（索引文件内容）和messages（相关记忆内容）
                 model=MODEL, system=system, messages=request_messages, tools=TOOLS, max_tokens=8000
             )
             reactive_retries = 0
@@ -625,7 +626,7 @@ def agent_loop(messages: list):
         messages.append({"role": "assistant", "content": response.content})
         if response.stop_reason != "tool_use":
             # s09: extract from pre-compression snapshot for full fidelity
-            extract_memories(pre_compress)
+            extract_memories(pre_compress) # mmc 不包含大模型发来的最后一条消息
             consolidate_memories()
             return
 

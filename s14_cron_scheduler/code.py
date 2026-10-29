@@ -386,7 +386,7 @@ def cron_matches(cron_expr: str, dt: datetime) -> bool:
     fields = cron_expr.strip().split()
     if len(fields) != 5:
         return False
-    minute, hour, dom, month, dow = fields
+    minute, hour, dom, month, dow = fields # mmc dom（day of month），dow（day of week）
     dow_val = (dt.weekday() + 1) % 7  # Python Monday=0 → cron Sunday=0
 
     m = _cron_field_matches(minute, dt.minute)
@@ -396,7 +396,7 @@ def cron_matches(cron_expr: str, dt: datetime) -> bool:
     dow_ok = _cron_field_matches(dow, dow_val)
 
     # Minute, hour, month must all match
-    if not (m and h and month_ok):
+    if not (m and h and month_ok): # mmc 分钟、小时、月份必须匹配
         return False
     # DOM and DOW: if both constrained, either matching is enough (OR)
     dom_unconstrained = dom == "*"
@@ -407,7 +407,7 @@ def cron_matches(cron_expr: str, dt: datetime) -> bool:
         return dow_ok
     if dow_unconstrained:
         return dom_ok
-    return dom_ok or dow_ok
+    return dom_ok or dow_ok # mmc 注意dom和dow有一个匹配即可
 
 
 def _validate_cron_field(field: str, lo: int, hi: int) -> str | None:
@@ -450,18 +450,18 @@ def validate_cron(cron_expr: str) -> str | None:
     fields = cron_expr.strip().split()
     if len(fields) != 5:
         return f"Expected 5 fields, got {len(fields)}"
-    bounds = [(0, 59), (0, 23), (1, 31), (1, 12), (0, 6)]
+    bounds = [(0, 59), (0, 23), (1, 31), (1, 12), (0, 6)] # mmc 每个字段的值范围
     names = ["minute", "hour", "day-of-month", "month", "day-of-week"]
     for i, (field, (lo, hi), name) in enumerate(zip(fields, bounds, names)):
         err = _validate_cron_field(field, lo, hi)
         if err:
             return f"{name}: {err}"
-    return None
+    return None # mmc 没出错会返回None
 
 
 def save_durable_jobs():
     """Persist durable jobs to .scheduled_tasks.json."""
-    durable = [asdict(j) for j in scheduled_jobs.values() if j.durable]
+    durable = [asdict(j) for j in scheduled_jobs.values() if j.durable] # mmc 把所有需要持久化的job写在磁盘上
     DURABLE_PATH.write_text(json.dumps(durable, indent=2))
 
 
@@ -473,12 +473,12 @@ def load_durable_jobs():
         jobs = json.loads(DURABLE_PATH.read_text())
         for j in jobs:
             job = CronJob(**j)
-            err = validate_cron(job.cron)
+            err = validate_cron(job.cron) # mmc 经典操作之校验cron表达式
             if err:
                 print(f"  \033[31m[cron] skipping invalid job {job.id}: {err}\033[0m")
                 continue
-            scheduled_jobs[job.id] = job
-        valid = [j for j in jobs if j["id"] in scheduled_jobs]
+            scheduled_jobs[job.id] = job # mmc 【入队】到全局job列表
+        valid = [j for j in jobs if j["id"] in scheduled_jobs] # mmc 成功入队了全局job列表的持久化job，cron表达式校验不过的job不会入队
         if valid:
             print(f"  \033[35m[cron] loaded {len(valid)} durable job(s)\033[0m")
     except Exception:
@@ -488,18 +488,18 @@ def load_durable_jobs():
 def schedule_job(cron: str, prompt: str, recurring: bool = True,
                  durable: bool = True) -> CronJob | str:
     """Register a new cron job. Returns CronJob or error string."""
-    err = validate_cron(cron)
+    err = validate_cron(cron) # mmc 校验 cron 表达式
     if err:
         return err
     job = CronJob(
-        id=f"cron_{random.randint(0, 999999):06d}",
+        id=f"cron_{random.randint(0, 999999):06d}", # mmc 用随机数作为cron job id，会不会太草率了
         cron=cron, prompt=prompt,
         recurring=recurring, durable=durable,
     )
     with cron_lock:
-        scheduled_jobs[job.id] = job
+        scheduled_jobs[job.id] = job # mmc 全局job列表【入队】
     if durable:
-        save_durable_jobs()
+        save_durable_jobs() # mmc 把全局job列表中所有需要持久化的job写在磁盘上
     print(f"  \033[35m[cron register] {job.id} '{cron}' → {prompt[:40]}\033[0m")
     return job
 
@@ -511,32 +511,34 @@ def cancel_job(job_id: str) -> str:
     if not job:
         return f"Job {job_id} not found"
     if job.durable:
-        save_durable_jobs()
+        save_durable_jobs() # mmc 如果job是持久化的，那么也要从磁盘上删除，这里的做法是重新保存一个新的.scheduled_tasks.json，相当于把当前job从旧的.scheduled_tasks.json中删除了
     print(f"  \033[31m[cron cancel] {job_id}\033[0m")
     return f"Cancelled {job_id}"
 
-
-def cron_scheduler_loop():
+# mmc 
+# 对于非一次性的job，从scheduled_jobs【出队】
+# 对于可执行的job，【入队】到cron_queue
+def cron_scheduler_loop(): # mmc 调度器跑在独立的 daemon 线程里，不依赖 agent_loop 是否在执行。单个 job 异常不会杀掉整个线程
     """Independent daemon thread: poll every 1s, fire matching jobs.
     Individual job errors are caught to prevent one bad job from
     killing the entire scheduler thread."""
     while True:
-        time.sleep(1)
+        time.sleep(1) # mmc 每隔一秒遍历一次scheduled_jobs
         now = datetime.now()
         # Date-aware marker prevents daily jobs from skipping on day 2+
-        minute_marker = now.strftime("%Y-%m-%d %H:%M")
+        minute_marker = now.strftime("%Y-%m-%d %H:%M") # mmc 精确到分钟的一个时间戳
         with cron_lock:
             for job in list(scheduled_jobs.values()):
                 try:
-                    if cron_matches(job.cron, now):
-                        if _last_fired.get(job.id) != minute_marker:
-                            cron_queue.append(job)
+                    if cron_matches(job.cron, now): # mmc 查找“到点了”的job
+                        if _last_fired.get(job.id) != minute_marker: # mmc 【重要】cron表达式精确到分钟，假设一个job是可重复job，那么最频繁也是一分钟执行一次。但是这个遍历每隔一秒做一次，那么极限情况下，该job可能会在同一分钟内触发60次，所以要做这个判断。
+                            cron_queue.append(job) # mmc 加入到 cron_queue 中
                             _last_fired[job.id] = minute_marker
                             print(f"  \033[35m[cron fire] {job.id} → "
                                   f"{job.prompt[:40]}\033[0m")
-                        if not job.recurring:
+                        if not job.recurring: # mmc 如果不是重复的job，从全局job列表中删除
                             scheduled_jobs.pop(job.id, None)
-                            if job.durable:
+                            if job.durable: # mmc 如果是持久化的job，保存到磁盘上
                                 save_durable_jobs()
                 except Exception as e:
                     print(f"  \033[31m[cron error] {job.id}: {e}\033[0m")
@@ -557,13 +559,13 @@ def has_cron_queue() -> bool:
 
 
 # Load durable jobs on startup, then start scheduler thread
-load_durable_jobs()
+load_durable_jobs() # mmc 注意这里，写在main之外的逻辑，读了持久化的job
 threading.Thread(target=cron_scheduler_loop, daemon=True).start()
 print("  \033[35m[cron] scheduler thread started\033[0m")
 
 
 # ── Cron Tools ──
-
+# mmc 【入队】scheduled_jobs
 def run_schedule_cron(cron: str, prompt: str,
                       recurring: bool = True, durable: bool = True) -> str:
     result = schedule_job(cron, prompt, recurring, durable)
@@ -777,21 +779,21 @@ def queue_processor_loop():
         time.sleep(0.2)
         if not has_cron_queue():
             continue
-        if not agent_lock.acquire(blocking=False):
+        if not agent_lock.acquire(blocking=False): # mmc 尝试立刻获取锁，锁空闲 → 拿到，返回 True，锁被占用 → 不等待，立即返回 False
             continue
         try:
             if not has_cron_queue():
                 continue
             print("\n  \033[35m[queue processor] delivering scheduled work\033[0m")
-            run_agent_turn_locked()
+            run_agent_turn_locked() # mmc user_query=None
         finally:
-            agent_lock.release()
+            agent_lock.release() # mmc 上面acquire获取了，这里要release
 
 
 if __name__ == "__main__":
     print("s14: cron scheduler")
     print("Enter a question, press Enter to send. Type q to quit.\n")
-    threading.Thread(target=queue_processor_loop, daemon=True).start()
+    threading.Thread(target=queue_processor_loop, daemon=True).start() # mmc 启动队列处理器线程
     print("  \033[35m[queue processor] started\033[0m")
     while True:
         try:

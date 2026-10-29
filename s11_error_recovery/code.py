@@ -50,7 +50,7 @@ FALLBACK_MODEL = os.getenv("FALLBACK_MODEL_ID")
 # ── Constants ──
 
 ESCALATED_MAX_TOKENS = 64000
-DEFAULT_MAX_TOKENS = 8000
+DEFAULT_MAX_TOKENS = 8000 # mmc 模型单次最大输出token数
 MAX_RECOVERY_RETRIES = 3
 MAX_RETRIES = 10
 BASE_DELAY_MS = 500
@@ -163,18 +163,18 @@ TOOL_HANDLERS = {"bash": run_bash, "read_file": run_read, "write_file": run_writ
 class RecoveryState:
     """Track recovery attempts across the loop."""
     def __init__(self):
-        self.has_escalated = False
-        self.recovery_count = 0
-        self.consecutive_529 = 0
-        self.has_attempted_reactive_compact = False
-        self.current_model = PRIMARY_MODEL
+        self.has_escalated = False # mmc 是否已经升级了MAX_TOKENS
+        self.recovery_count = 0 # mmc 已经升级MAX_TOKENS之后输出仍超限，提示大模型“请继续”的次数
+        self.consecutive_529 = 0 # mmc 连续 529 过载计数器
+        self.has_attempted_reactive_compact = False # mmc 是否已经尝试过reactive_compact
+        self.current_model = PRIMARY_MODEL # mmc 可能被切换成FALLBACK_MODEL
 
 
 def retry_delay(attempt, retry_after=None):
     """Exponential backoff with jitter. Retry-After takes priority."""
     if retry_after:
         return retry_after
-    base = min(BASE_DELAY_MS * (2 ** attempt), 32000) / 1000
+    base = min(BASE_DELAY_MS * (2 ** attempt), 32000) / 1000 # mmc 2的attempt次方
     jitter = random.uniform(0, base * 0.25)
     return base + jitter
 
@@ -191,19 +191,19 @@ def with_retry(fn, state: RecoveryState):
             name = type(e).__name__
             msg = str(e).lower()
 
-            # 429 rate limit -> exponential backoff
+            # 429 rate limit -> exponential backoff # mmc 429 — Too Many Requests（速率限制）：你请求太快了，慢一点。
             if "ratelimit" in name.lower() or "429" in msg:
                 delay = retry_delay(attempt)
                 print(f"  \033[33m[429 rate limit] retry {attempt+1}/{MAX_RETRIES},"
                       f" wait {delay:.1f}s\033[0m")
-                time.sleep(delay)
+                time.sleep(delay) # mmc 等待时间随attempt指数增长
                 continue
 
-            # 529 overloaded -> exponential backoff + fallback model
+            # 529 overloaded -> exponential backoff + fallback model # mmc 529 — Overloaded（服务过载）：我太忙了，忙不过来。
             if "overloaded" in name.lower() or "529" in msg or "overloaded" in msg:
                 state.consecutive_529 += 1
                 if state.consecutive_529 >= MAX_CONSECUTIVE_529:
-                    if FALLBACK_MODEL:
+                    if FALLBACK_MODEL: # mmc 529 连续 3 次，切换到备用模型，清零state.consecutive_529计数
                         state.current_model = FALLBACK_MODEL
                         state.consecutive_529 = 0
                         print(f"  \033[31m[529 x{MAX_CONSECUTIVE_529}]"
@@ -211,7 +211,7 @@ def with_retry(fn, state: RecoveryState):
                     else:
                         state.consecutive_529 = 0
                         print(f"  \033[31m[529 x{MAX_CONSECUTIVE_529}]"
-                              f" no FALLBACK_MODEL_ID configured, continuing retry\033[0m")
+                              f" no FALLBACK_MODEL_ID configured, continuing retry\033[0m") # mmc 没有指定备用模型，就算了...
                 delay = retry_delay(attempt)
                 print(f"  \033[33m[529 overloaded] retry {attempt+1}/{MAX_RETRIES},"
                       f" wait {delay:.1f}s\033[0m")
@@ -219,8 +219,9 @@ def with_retry(fn, state: RecoveryState):
                 continue
 
             # Not transient -> re-raise for outer try/except
+            # mmc 能走到这里，说明发生错误但未被捕获，直接抛出异常
             raise
-    raise RuntimeError(f"Max retries ({MAX_RETRIES}) exceeded")
+    raise RuntimeError(f"Max retries ({MAX_RETRIES}) exceeded") # mmc 走到这里，说明超过了最大重试次数
 
 
 def is_prompt_too_long_error(e: Exception) -> bool:
@@ -272,25 +273,25 @@ def agent_loop(messages: list, context: dict):
         # ── LLM call: with_retry handles 429/529, outer handles rest ──
         try:
             response = with_retry(
-                lambda mt=max_tokens, mdl=state.current_model:
+                lambda mt=max_tokens, mdl=state.current_model: # mmc 一句话总结：lambda mt=..., mdl=...: 是 Python 中"立即捕获变量值"的惯用写法，防止闭包延迟绑定导致重试时取到被修改的值。
                     client.messages.create(
                         model=mdl, system=system, messages=messages,
                         tools=TOOLS, max_tokens=mt),
                 state)
-        except Exception as e:
+        except Exception as e: # mmc 发生了非429、529这种需要延迟retry的任务
             # Path 2: prompt_too_long -> reactive compact (once)
             if is_prompt_too_long_error(e):
                 if not state.has_attempted_reactive_compact:
-                    messages[:] = reactive_compact(messages)
+                    messages[:] = reactive_compact(messages) # mmc 这里简化了，取最后5条
                     state.has_attempted_reactive_compact = True
                     continue
                 print("  \033[31m[unrecoverable] still too long after compact\033[0m")
                 messages.append({"role": "assistant", "content": [
                     {"type": "text",
-                     "text": "[Error] Context too large, cannot continue."}]})
+                     "text": "[Error] Context too large, cannot continue."}]}) # mmc 仅压缩一次，还报错直接返回
                 return
 
-            # Unrecoverable
+            # Unrecoverable # mmc 未能recover的错误，直接返回
             name = type(e).__name__
             print(f"  \033[31m[unrecoverable] {name}: {str(e)[:100]}\033[0m")
             messages.append({"role": "assistant", "content": [
@@ -300,6 +301,7 @@ def agent_loop(messages: list, context: dict):
         # ── Path 1: max_tokens -> escalate or continue ──
         if response.stop_reason == "max_tokens":
             # First escalation: don't append truncated output, retry same request
+            # mmc 第一次token超限，不剪裁，只提升限制
             if not state.has_escalated:
                 max_tokens = ESCALATED_MAX_TOKENS
                 state.has_escalated = True
@@ -309,7 +311,7 @@ def agent_loop(messages: list, context: dict):
             # 64K still truncated: save truncated output + continuation prompt
             messages.append({"role": "assistant", "content": response.content})
             if state.recovery_count < MAX_RECOVERY_RETRIES:
-                messages.append({"role": "user", "content": CONTINUATION_PROMPT})
+                messages.append({"role": "user", "content": CONTINUATION_PROMPT}) # mmc 由于是输出超限，所以不用修改历史对话，仅提示大模型“请继续”即可
                 state.recovery_count += 1
                 print(f"  \033[33m[max_tokens] continuation"
                       f" {state.recovery_count}/{MAX_RECOVERY_RETRIES}\033[0m")

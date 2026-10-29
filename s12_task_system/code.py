@@ -66,14 +66,14 @@ def _task_path(task_id: str) -> Path:
 def create_task(subject: str, description: str = "",
                 blockedBy: list[str] | None = None) -> Task:
     task = Task(
-        id=f"task_{int(time.time())}_{random.randint(0, 9999):04d}",
+        id=f"task_{int(time.time())}_{random.randint(0, 9999):04d}", # mmc 时间戳+随机数作为task id
         subject=subject,
         description=description,
         status="pending",
         owner=None,
         blockedBy=blockedBy or [],
     )
-    save_task(task)
+    save_task(task) # mmc 序列化到磁盘，以id为文件名
     return task
 
 
@@ -86,7 +86,7 @@ def load_task(task_id: str) -> Task:
 
 
 def list_tasks() -> list[Task]:
-    return [Task(**json.loads(p.read_text()))
+    return [Task(**json.loads(p.read_text())) # mmc 读取所有本地保存的task文件，每个文件创建一个task对象，放到一个列表中，返回
             for p in sorted(TASKS_DIR.glob("task_*.json"))]
 
 
@@ -101,9 +101,9 @@ def can_start(task_id: str) -> bool:
     Missing dependencies are treated as blocked."""
     task = load_task(task_id)
     for dep_id in task.blockedBy:
-        if not _task_path(dep_id).exists():
+        if not _task_path(dep_id).exists(): # mmc 本地没找到前置任务文件，不能开始
             return False
-        if load_task(dep_id).status != "completed":
+        if load_task(dep_id).status != "completed": # mmc 前置任务状态不为completed，不能开始
             return False
     return True
 
@@ -115,10 +115,10 @@ def claim_task(task_id: str, owner: str = "agent") -> str:
     if not can_start(task_id):
         deps = [d for d in task.blockedBy
                 if not _task_path(d).exists() or load_task(d).status != "completed"]
-        return f"Blocked by: {deps}"
-    task.owner = owner
-    task.status = "in_progress"
-    save_task(task)
+        return f"Blocked by: {deps}" # mmc 如果被阻塞，则把阻塞的任务id返回
+    task.owner = owner # mmc 如果任务能够开始执行，则owner设为agent，多Agent场景下防止重复认领
+    task.status = "in_progress" # mmc 如果任务能够开始执行，则状态设为in_progress
+    save_task(task) # mmc 更新本地task文件
     print(f"  \033[36m[claim] {task.subject} → in_progress (owner: {owner})\033[0m")
     return f"Claimed {task.id} ({task.subject})"
 
@@ -129,7 +129,7 @@ def complete_task(task_id: str) -> str:
         return f"Task {task_id} is {task.status}, cannot complete"
     task.status = "completed"
     save_task(task)
-    unblocked = [t.subject for t in list_tasks()
+    unblocked = [t.subject for t in list_tasks() # mmc 遍历所有任务，找到本任务完成后本地所有可以开始执行的任务，返回它们的subject
                  if t.status == "pending" and t.blockedBy and can_start(t.id)]
     print(f"  \033[32m[complete] {task.subject} ✓\033[0m")
     msg = f"Completed {task.id} ({task.subject})"
@@ -214,7 +214,7 @@ def run_write(path: str, content: str) -> str:
 
 # Task tools
 
-def run_create_task(subject: str, description: str = "",
+def run_create_task(subject: str, description: str = "", # mmc 工具功能：创建一个task文件到本地
                     blockedBy: list[str] | None = None) -> str:
     task = create_task(subject, description, blockedBy)
     deps = f" (blockedBy: {', '.join(blockedBy)})" if blockedBy else ""
@@ -222,7 +222,7 @@ def run_create_task(subject: str, description: str = "",
     return f"Created {task.id}: {task.subject}{deps}"
 
 
-def run_list_tasks() -> str:
+def run_list_tasks() -> str: # mmc 工具功能：告诉大模型当前本地所有保存的task的详细信息
     tasks = list_tasks()
     if not tasks:
         return "No tasks. Use create_task to add some."
@@ -237,18 +237,18 @@ def run_list_tasks() -> str:
     return "\n".join(lines)
 
 
-def run_get_task(task_id: str) -> str:
+def run_get_task(task_id: str) -> str: # mmc 工具功能：根据task id查找本地保存的一个task，拿到详细信息
     try:
         return get_task(task_id)
     except FileNotFoundError:
         return f"Error: Task {task_id} not found"
 
 
-def run_claim_task(task_id: str) -> str:
+def run_claim_task(task_id: str) -> str: # mmc 工具功能：根据task id查找本地保存的一个task，状态改为in_progress，owner改为agent，表示开始执行
     return claim_task(task_id, owner="agent")
 
 
-def run_complete_task(task_id: str) -> str:
+def run_complete_task(task_id: str) -> str: # mmc 工具功能：根据task id查找本地保存的一个task，状态改为completed，同时查找此时本地所有可以开始执行的任务，拿到它们的subject
     return complete_task(task_id)
 
 

@@ -456,7 +456,7 @@ def agent_loop(messages: list):
     while True:
         # s08 change: three preprocessors (0 API calls, cheap first)
         # Order matches CC source: budget → snip → micro
-        messages[:] = tool_result_budget(messages)    # L3: persist large results first
+        messages[:] = tool_result_budget(messages)    # L3: persist large results first mmc budget 先跑，确保大内容落盘后再做占位和裁剪
         messages[:] = snip_compact(messages)          # L1: trim middle
         messages[:] = micro_compact(messages)         # L2: old result placeholders
 

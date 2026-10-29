@@ -606,25 +606,25 @@ class MessageBus:
 
     def send(self, from_agent: str, to_agent: str, content: str,
              msg_type: str = "message"):
-        msg = {"from": from_agent, "to": to_agent,
+        msg = {"from": from_agent, "to": to_agent, # mmc 生成一个消息对象
                "content": content, "type": msg_type,
                "ts": time.time()}
-        inbox = MAILBOX_DIR / f"{to_agent}.jsonl"
+        inbox = MAILBOX_DIR / f"{to_agent}.jsonl" # mmc 消息放在to_agent的邮箱里
         with open(inbox, "a") as f:
-            f.write(json.dumps(msg) + "\n")
+            f.write(json.dumps(msg) + "\n") # mmc 文本文件末尾追加一行，读的时候先分行，然后每一行load为一个消息对象
         print(f"  \033[33m[bus] {from_agent} → {to_agent}: "
               f"{content[:50]}\033[0m")
 
     def read_inbox(self, agent: str) -> list[dict]:
-        inbox = MAILBOX_DIR / f"{agent}.jsonl"
+        inbox = MAILBOX_DIR / f"{agent}.jsonl" # mmc 读取某个agent的邮箱
         if not inbox.exists():
             return []
-        msgs = [json.loads(line) for line in inbox.read_text().splitlines()
+        msgs = [json.loads(line) for line in inbox.read_text().splitlines() # mmc 读取所有消息
                 if line.strip()]
-        inbox.unlink()  # consume: read + delete
+        inbox.unlink()  # consume: read + delete # mmc 删除文件
         return msgs
 
-    def peek(self, agent: str) -> bool:
+    def peek(self, agent: str) -> bool: # mmc 相比read_inbox，只是判断邮箱文件是否存在，不删除文件
         """Non-destructive: True if the agent has unread inbox messages.
         The Lead's inbox poller uses this to decide whether to wake a turn
         without consuming the mailbox."""
@@ -645,12 +645,12 @@ def spawn_teammate_thread(name: str, role: str, prompt: str) -> str:
     Teaching version: max 10 rounds per teammate.
     Real CC: teammates use idle loop (wait for inbox, work, repeat)
     until shutdown_request."""
-    if name in active_teammates:
+    if name in active_teammates: # mmc 若一个teammate已经存在，这里会直接返回，意味着lead不能通过重复调用spawn_teammate_thread来给teammate补发信息
         return f"Teammate '{name}' already exists"
 
     system = (f"You are '{name}', a {role}. "
               f"Use tools to complete tasks. "
-              f"Send results via send_message to 'lead'.")
+              f"Send results via send_message to 'lead'.") # mmc system里要求只能给lead发送消息，是这样吗？
 
     def run():
         messages = [{"role": "user", "content": prompt}]
@@ -671,7 +671,7 @@ def spawn_teammate_thread(name: str, role: str, prompt: str) -> str:
             {"name": "send_message",
              "description": "Send a message to another agent.",
              "input_schema": {"type": "object",
-                              "properties": {"to": {"type": "string"},
+                              "properties": {"to": {"type": "string"}, # mmc 支持给任意一个agent发送消息
                                              "content": {"type": "string"}},
                               "required": ["to", "content"]}},
         ]
@@ -681,11 +681,11 @@ def spawn_teammate_thread(name: str, role: str, prompt: str) -> str:
                                                   "Sent")[1],
         }
 
-        for _ in range(10):
-            inbox = BUS.read_inbox(name)
+        for _ in range(10): # mmc teammate最多跑10次react循环
+            inbox = BUS.read_inbox(name) # mmc 读自己信箱内的消息。注意与之前的react循环不同的是，这里每次react循环都可能插入新用户消息（非功能性的，可能是新话题？）
             if inbox:
                 messages.append({"role": "user",
-                                 "content": f"<inbox>{json.dumps(inbox)}</inbox>"})
+                                 "content": f"<inbox>{json.dumps(inbox)}</inbox>"}) # mmc 信箱里所有消息拼成一条message
             try:
                 response = client.messages.create(
                     model=MODEL, system=system, messages=messages[-20:],
@@ -716,8 +716,8 @@ def spawn_teammate_thread(name: str, role: str, prompt: str) -> str:
                 else:
                     continue
                 break
-        BUS.send(name, "lead", summary, "result")
-        active_teammates.pop(name, None)
+        BUS.send(name, "lead", summary, "result") # mmc 发送总结给lead
+        active_teammates.pop(name, None) # mmc 删除自己
         print(f"  \033[32m[teammate] {name} finished\033[0m")
 
     active_teammates[name] = True
@@ -733,12 +733,12 @@ def run_spawn_teammate(name: str, role: str, prompt: str) -> str:
 
 
 def run_send_message(to: str, content: str) -> str:
-    BUS.send("lead", to, content)
+    BUS.send("lead", to, content) # mmc 这是lead的专用工具，所以from_agent="lead"
     return f"Sent to {to}"
 
 
 def run_check_inbox() -> str:
-    msgs = BUS.read_inbox("lead")
+    msgs = BUS.read_inbox("lead") # mmc 这是lead的专用工具，所以agent="lead"
     if not msgs:
         return "(inbox empty)"
     lines = []
@@ -936,9 +936,10 @@ if __name__ == "__main__":
         # inbox messages or completed background tasks. Don't gate on
         # active_teammates: a teammate sends its result and then removes itself,
         # so the final message can outlive its registry entry.
+        # mmc 轮询 ~1s，并在异步结果就绪时唤醒领队：队友收件箱消息或已完成的后台任务。不要依赖 active_teammates：队友发送结果后即会移除自身，因此最终消息的存活时间可能超过其注册表条目的存活时间。
         while True:
             time.sleep(1)
-            if BUS.peek("lead") or has_pending_background():
+            if BUS.peek("lead") or has_pending_background(): # mmc 收件箱有消息或后台任务完成，往events里put一个元素，从而唤醒挂起的主线程（lead）
                 events.put(("wake", None))
 
     threading.Thread(target=input_reader, daemon=True).start()
@@ -946,7 +947,7 @@ if __name__ == "__main__":
 
     had_teammates = False
     while True:
-        kind, payload = events.get()
+        kind, payload = events.get() # mmc 当队列为空时，events.get() 会一直阻塞（挂起），直到某个生产者线程往里 put 了东西才返回（input_reader和inbox_poller）
         if kind == "quit":
             break
         if kind == "user":
@@ -955,14 +956,24 @@ if __name__ == "__main__":
             history.append({"role": "user", "content": payload})
         else:  # "wake": teammate inbox or background results are ready
             parts = []
-            inbox = BUS.read_inbox("lead")
+            inbox = BUS.read_inbox("lead") # mmc 读取领队收件箱
             if inbox:
                 parts.append("[Inbox]\n" + "\n".join(
-                    f"From {m['from']}: {m['content'][:200]}" for m in inbox))
+                    f"From {m['from']}: {m['content'][:200]}" for m in inbox)) # mmc 收件箱所有消息拼成一条字符串
             bg = collect_background_results()
-            parts.extend(bg)
+            parts.extend(bg) # mmc parts后面拼接上后台任务结果
             if not parts:
                 continue  # already drained by an earlier wake (idempotent)
+                """ mmc 这句注释讲的是**"wake" 事件的幂等去重**——多余的唤醒被跳过，因为内容早就被前一个唤醒消费光了。
+                关键在于：poller 只负责发唤醒信号，不负责消费消息；真正消费的是主循环里那次 read_inbox。 而主循环是单线程的，跑一轮 agent 可能要好几秒。
+                于是一边 poller 每秒都在发 wake，另一边主循环还在忙着跑上一轮没回来：
+                t=1  poller 发 wake → events=[wake]
+                t=2  poller 发 wake → events=[wake, wake]   (peek 仍为真，因为主循环还没读)
+                t=3  poller 发 wake → events=[wake, wake, wake]
+                t=5  主循环 get() 第一个 wake → read_inbox 把收件箱清空、bg 结果收走 → 跑一轮
+                t=6  主循环 get() 第二个 wake → 此时收件箱已空、bg 也空 → parts == [] → continue
+                t=7  主循环 get() 第三个 wake → 同样空 → continue
+                """
             history.append({"role": "user", "content": "\n".join(parts)})
             print(f"\n\033[33m[wake: {len(inbox)} inbox + {len(bg)} background "
                   f"-> new turn]\033[0m")
@@ -979,7 +990,7 @@ if __name__ == "__main__":
         # Announce once when every teammate has finished and its output drained.
         if active_teammates:
             had_teammates = True
-        elif had_teammates and not BUS.peek("lead") and not has_pending_background():
+        elif had_teammates and not BUS.peek("lead") and not has_pending_background(): # mmc 曾经有队友（had_teammates），但现在没队友了（no active_teammates），且lead收件箱为空（not BUS.peek("lead")），说明队友的任务都执行完了，lead也都处理完了
             print("\033[32m[all teammates done]\033[0m")
             had_teammates = False
         print()

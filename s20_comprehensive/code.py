@@ -300,7 +300,7 @@ def _parse_frontmatter(text: str) -> tuple[dict, str]:
     return meta, parts[2].strip()
 
 
-def scan_skills():
+def scan_skills(): # mmc 扫描技能，填充SKILL_REGISTRY
     SKILL_REGISTRY.clear()
     if not SKILLS_DIR.exists():
         return
@@ -321,7 +321,7 @@ def scan_skills():
         }
 
 
-scan_skills()
+scan_skills() # mmc before main
 
 
 def list_skills() -> str:
@@ -952,7 +952,7 @@ def stop_hook(messages: list):
     return None
 
 
-register_hook("UserPromptSubmit", user_prompt_hook)
+register_hook("UserPromptSubmit", user_prompt_hook) # mmc before main
 register_hook("PreToolUse", permission_hook)
 register_hook("PreToolUse", log_hook)
 register_hook("PostToolUse", large_output_hook)
@@ -1436,7 +1436,7 @@ def save_durable_jobs():
     DURABLE_PATH.write_text(json.dumps(durable, indent=2))
 
 
-def load_durable_jobs():
+def load_durable_jobs(): # mmc 读取本地持久化的cron job，放进scheduled_jobs
     if not DURABLE_PATH.exists():
         return
     try:
@@ -1474,7 +1474,7 @@ def cancel_job(job_id: str) -> str:
     return f"Cancelled {job_id}"
 
 
-def cron_scheduler_loop():
+def cron_scheduler_loop(): # mmc 从scheduled_jobs找到匹配当前时间的cron job，放到待执行队列cron_queue
     while True:
         time.sleep(1)
         now = datetime.now()
@@ -1524,8 +1524,8 @@ def run_cancel_cron(job_id: str) -> str:
     return cancel_job(job_id)
 
 
-load_durable_jobs()
-threading.Thread(target=cron_scheduler_loop, daemon=True).start()
+load_durable_jobs() # mmc before main
+threading.Thread(target=cron_scheduler_loop, daemon=True).start() # mmc before main
 
 
 # ── MCP System ──
@@ -2070,7 +2070,7 @@ def print_turn_assistants(messages: list, turn_start: int):
 def cron_autorun_loop(history: list, context: dict):
     while True:
         time.sleep(1)
-        fired = consume_cron_queue()
+        fired = consume_cron_queue() # mmc 消费cron_queue
         if not fired:
             continue
         with agent_lock:
@@ -2081,18 +2081,18 @@ def cron_autorun_loop(history: list, context: dict):
                 terminal_print(
                     f"  \033[35m[cron auto] {job.prompt[:60]}\033[0m")
             agent_loop(history, context)
-            context.update(update_context(context, history))
+            context.update(update_context(context, history)) # mmc a.update(b)，相当于把b的键值添加或更新到a中，不会删除a中的键值
             print_turn_assistants(history, turn_start)
 
 
 if __name__ == "__main__":
-    CLI_ACTIVE = True
+    CLI_ACTIVE = True # mmc 标记初始化结束
     print("s20: comprehensive agent")
     print("Enter a question, press Enter to send. Type q to quit.\n")
     history = []
     context = update_context({}, [])
     threading.Thread(target=cron_autorun_loop,
-                     args=(history, context), daemon=True).start()
+                     args=(history, context), daemon=True).start() # mmc 注意cron_autorun_loop和主线程共享history列表，因此使用history列表时要加锁
     while True:
         try:
             query = input(PROMPT)
